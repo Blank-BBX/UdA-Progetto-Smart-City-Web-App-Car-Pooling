@@ -44,55 +44,23 @@
 
 ---
 
-## 📁 Project Structure
-smartcity-carpooling/
-│
-├── db/ # Backend (Express + SQLite)
-│ ├── server.js
-│ └── database.db
-│
-├── frontend/
-│ └── src/
-│ ├── App.jsx
-│ ├── components/
-│ └── pages/
-│
-└── README.md
-
-
----
-
 ## 🚀 Getting Started
 
-### 1. Clone repository
-
 ```bash
+# Clone repository
 git clone https://github.com/your-username/smartcity-carpooling.git
 cd smartcity-carpooling
-2. Start backend
+
+# Start backend
 cd db
 npm install
 node server.js
 
-Backend running on:
+# Backend running on http://localhost:3000
 
-http://localhost:3000
-3. Start frontend
+# Start frontend (open a new terminal)
 cd frontend
 npm install
 npm run dev
 
-Frontend running on:
-
-http://localhost:5173
-🔗 API Overview
-Auth
-POST /api/register
-POST /api/login
-Trips
-GET /api/trips
-POST /api/trips
-Bookings
-POST /api/bookings
-Feedback
-POST /api/feedback
+# Frontend running on http://localhost:5173
