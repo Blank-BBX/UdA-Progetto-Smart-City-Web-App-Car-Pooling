@@ -12,12 +12,6 @@
 
 ---
 
-## 🎬 Preview
-
-![preview](./screenshots/app.png)
-
----
-
 ## ✨ Features
 
 - 🔐 User authentication (login & register)
