@@ -1,16 +1,82 @@
-# React + Vite
+🚗 SmartCity Carpooling
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Una piattaforma web per il carpooling urbano che consente agli utenti di condividere viaggi, ridurre i costi e migliorare la mobilità nelle smart city.
 
-Currently, two official plugins are available:
+✨ Features
+🔐 Autenticazione utenti (registrazione & login)
+🚘 Pubblicazione viaggi (solo autisti)
+🔍 Ricerca viaggi con filtri (città e data)
+📅 Prenotazione viaggi
+⭐ Sistema di feedback tra utenti
+👤 Gestione stato utente lato frontend
+⚡ API REST semplice e veloce
+🛠️ Tech Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Frontend
 
-## React Compiler
+React (Vite)
+JavaScript (no framework CSS, inline styles)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Backend
 
-## Expanding the ESLint configuration
+Node.js
+Express
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Database
+
+SQLite3
+📦 Project Structure
+smartcity-carpooling/
+│
+├── db/
+│   ├── server.js        # API backend (Express)
+│   └── database.db      # SQLite database
+│
+├── frontend/
+│   └── src/
+│       ├── App.jsx
+│       ├── components/
+│       │   ├── Navbar.jsx
+│       │   ├── ConnectionCheck.jsx
+│       │   └── Card.jsx
+│       └── pages/
+│           ├── Home.jsx
+│           ├── Dashboard.jsx
+│           ├── SearchTrip.jsx
+│           ├── CreateTrip.jsx
+│           ├── Login.jsx
+│           ├── Register.jsx
+│           └── Feedback.jsx
+│
+└── README.md
+🚀 Getting Started
+1️⃣ Clone del progetto
+git clone https://github.com/tuo-username/smartcity-carpooling.git
+cd smartcity-carpooling
+2️⃣ Avvio Backend
+cd db
+npm install
+node server.js
+
+Server disponibile su:
+
+http://localhost:3000
+3️⃣ Avvio Frontend
+cd frontend
+npm install
+npm run dev
+
+App disponibile su:
+
+http://localhost:5173
+🔗 API Overview
+Auth
+POST /api/register → registrazione utente
+POST /api/login → login
+Trips
+GET /api/trips → lista viaggi (con filtri)
+POST /api/trips → crea viaggio
+Bookings
+POST /api/bookings → prenotazione
+Feedback
+POST /api/feedback → lascia recensione
