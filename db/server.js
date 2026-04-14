@@ -1,632 +1,154 @@
+// db/server.js — SmartCity Carpooling Backend v1.1
 const express = require("express");
-const cors = require("cors");
+const cors    = require("cors");
+const path    = require("path");
 const sqlite3 = require("sqlite3").verbose();
-const crypto = require("crypto");
+const crypto  = require("crypto");
 
-const app = express();
-const port = 5000;
+const app  = express();
+const PORT = 5000;
 
-console.log("Avvio backend...");
-
-// -------------------------
-// DATABASE
-// -------------------------
-const db = new sqlite3.Database("database.db", (err) => {
-  if (err) {
-    console.log("Errore database:", err.message);
-  } else {
-    console.log("Database SQLite connesso correttamente.");
-    initDB();
-  }
-});
-
-function initDB() {
-  db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS utenti (
-      id       INTEGER PRIMARY KEY AUTOINCREMENT,
-      nome     TEXT NOT NULL,
-      cognome  TEXT NOT NULL,
-      email    TEXT NOT NULL UNIQUE,
-      telefono TEXT,
-      password TEXT NOT NULL
-    )`);
-
-    // Un utente diventa "autista" quando ha almeno un veicolo registrato
-    db.run(`CREATE TABLE IF NOT EXISTS veicoli (
-      id        INTEGER PRIMARY KEY AUTOINCREMENT,
-      id_utente INTEGER NOT NULL,
-      modello   TEXT NOT NULL,
-      targa     TEXT NOT NULL,
-      posti     INTEGER NOT NULL DEFAULT 4,
-      foto      TEXT,
-      FOREIGN KEY (id_utente) REFERENCES utenti(id)
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS viaggi (
-      id             INTEGER PRIMARY KEY AUTOINCREMENT,
-      id_utente      INTEGER NOT NULL,
-      citta_partenza TEXT NOT NULL,
-      citta_arrivo   TEXT NOT NULL,
-      data_viaggio   TEXT NOT NULL,
-      ora_partenza   TEXT NOT NULL,
-      ora_arrivo     TEXT NOT NULL,
-      posti          INTEGER NOT NULL,
-      descrizione    TEXT,
-      FOREIGN KEY (id_utente) REFERENCES utenti(id)
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS prenotazioni (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      id_viaggio    INTEGER NOT NULL,
-      id_passeggero INTEGER NOT NULL,
-      stato         TEXT CHECK(stato IN ('in_attesa','accettata','rifiutata')) DEFAULT 'in_attesa',
-      FOREIGN KEY (id_viaggio)    REFERENCES viaggi(id),
-      FOREIGN KEY (id_passeggero) REFERENCES utenti(id)
-    )`);
-
-    db.run(`CREATE TABLE IF NOT EXISTS feedback (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      id_autore       INTEGER NOT NULL,
-      id_destinatario INTEGER NOT NULL,
-      id_viaggio      INTEGER NOT NULL,
-      voto            INTEGER CHECK(voto BETWEEN 1 AND 5),
-      commento        TEXT,
-      FOREIGN KEY (id_autore)       REFERENCES utenti(id),
-      FOREIGN KEY (id_destinatario) REFERENCES utenti(id),
-      FOREIGN KEY (id_viaggio)      REFERENCES viaggi(id)
-    )`);
-
-    console.log("Tabelle DB inizializzate.");
-
-    // Migrations: aggiunge colonne mancanti nelle tabelle gia esistenti
-    const migrations = [
-      `ALTER TABLE viaggi ADD COLUMN id_utente INTEGER`,
-      `ALTER TABLE viaggi ADD COLUMN ora_arrivo TEXT`,
-      `ALTER TABLE viaggi ADD COLUMN descrizione TEXT`,
-      `ALTER TABLE veicoli ADD COLUMN posti INTEGER NOT NULL DEFAULT 4`,
-    ];
-    migrations.forEach(m => {
-      db.run(m, (err) => {
-        if (err && !err.message.includes("duplicate column")) {
-          console.log("Migration warning:", err.message);
-        }
-      });
-    });
-  });
-}
-
-function hashPassword(pwd) {
-  return crypto.createHash("sha256").update(pwd).digest("hex");
-}
-
-// Helper: data/ora corrente come stringhe
-function todayStr() { return new Date().toISOString().split("T")[0]; }
-function nowStr()   { return new Date().toTimeString().slice(0, 5); }
-
-// -------------------------
-// MIDDLEWARE
-// -------------------------
-app.use(cors({
-  origin: "http://localhost:5173",
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type"]
-}));
+app.use(cors());
 app.use(express.json());
-app.use((req, res, next) => {
-  console.log("Richiesta:", req.method, req.url);
-  next();
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
+
+// ── Database ──────────────────────────────────────────────────────────────────
+const DB_PATH = path.join(__dirname, "database.db");
+const db = new sqlite3.Database(DB_PATH, (err) => {
+  if (err) { console.error("❌ Errore apertura DB:", err.message); process.exit(1); }
+  console.log("✅ Connesso al database SQLite");
 });
 
-// -------------------------
-// TEST / ROOT
-// -------------------------
-app.get("/test", (req, res) => {
-  db.get("SELECT 1", (err) => {
-    if (err) return res.json({ success: false, message: "Errore DB" });
-    res.json({ success: true });
-  });
+db.serialize(() => {
+  db.run("PRAGMA foreign_keys = ON");
+
+  db.run(`CREATE TABLE IF NOT EXISTS utenti (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome     TEXT NOT NULL,
+    cognome  TEXT NOT NULL,
+    email    TEXT NOT NULL UNIQUE,
+    password TEXT NOT NULL,
+    telefono TEXT,
+    tipo     TEXT NOT NULL DEFAULT 'passeggero'
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS veicoli (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_utente  INTEGER NOT NULL REFERENCES utenti(id),
+    modello    TEXT NOT NULL,
+    targa      TEXT NOT NULL UNIQUE,
+    posti      INTEGER NOT NULL DEFAULT 4,
+    carburante TEXT NOT NULL DEFAULT 'benzina',
+    foto       TEXT
+  )`);
+
+  // Migrazione sicura: aggiunge colonna carburante se il DB era già esistente
+  db.run("ALTER TABLE veicoli ADD COLUMN carburante TEXT NOT NULL DEFAULT 'benzina'", () => {});
+
+  db.run(`CREATE TABLE IF NOT EXISTS viaggi (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_utente      INTEGER NOT NULL REFERENCES utenti(id),
+    id_veicolo     INTEGER REFERENCES veicoli(id),
+    citta_partenza TEXT NOT NULL,
+    citta_arrivo   TEXT NOT NULL,
+    data_viaggio   TEXT NOT NULL,
+    ora_partenza   TEXT NOT NULL,
+    ora_arrivo     TEXT NOT NULL,
+    posti          INTEGER NOT NULL DEFAULT 3,
+    descrizione    TEXT
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS prenotazioni (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_viaggio    INTEGER NOT NULL REFERENCES viaggi(id),
+    id_passeggero INTEGER NOT NULL REFERENCES utenti(id),
+    stato         TEXT NOT NULL DEFAULT 'in_attesa'
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS feedback (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_autore       INTEGER NOT NULL REFERENCES utenti(id),
+    id_destinatario INTEGER NOT NULL REFERENCES utenti(id),
+    id_viaggio      INTEGER REFERENCES viaggi(id),
+    voto            INTEGER NOT NULL,
+    commento        TEXT
+  )`);
+
+  seedTestData();
 });
 
-app.get("/", (req, res) => res.send("Backend car pooling attivo"));
+// ── Seed dati di test ─────────────────────────────────────────────────────────
+function seedTestData() {
+  const pw = sha256("password123");
 
-// -------------------------
-// HELPER: controlla se utente è autista (ha almeno un veicolo)
-// -------------------------
-function isAutista(userId, callback) {
-  db.get(
-    "SELECT COUNT(*) as cnt FROM veicoli WHERE id_utente = ?",
-    [userId],
-    (err, row) => {
-      if (err) return callback(false);
-      callback(row.cnt > 0);
-    }
+  const users = [
+    [1, "Marco",    "Bianchi",  "marco@test.it",    pw, "3331234567", "autista"],
+    [2, "Laura",    "Rossi",    "laura@test.it",    pw, "3337654321", "autista"],
+    [3, "Giovanni", "Ferrari",  "giovanni@test.it", pw, "3339876543", "autista"],
+    [4, "Sofia",    "Conti",    "sofia@test.it",    pw, "3334567890", "passeggero"],
+    [5, "Luca",     "Esposito", "luca@test.it",     pw, "3336789012", "passeggero"],
+    [6, "Chiara",   "Martini",  "chiara@test.it",   pw, null,         "passeggero"],
+  ];
+  users.forEach(u =>
+    db.run("INSERT OR IGNORE INTO utenti (id,nome,cognome,email,password,telefono,tipo) VALUES (?,?,?,?,?,?,?)", u)
+  );
+
+  const vehicles = [
+    [1, 1, "Fiat Panda",          "AB123CD", 5, "benzina"],
+    [2, 2, "Toyota Yaris Hybrid", "EF456GH", 5, "ibrido"],
+    [3, 3, "Tesla Model 3",       "IJ789KL", 5, "elettrico"],
+    [4, 1, "Volkswagen Golf",     "MN012OP", 5, "diesel"],
+  ];
+  vehicles.forEach(v =>
+    db.run("INSERT OR IGNORE INTO veicoli (id,id_utente,modello,targa,posti,carburante) VALUES (?,?,?,?,?,?)", v)
+  );
+
+  const pastTrips = [
+    [1, 1, 1, "Milano",  "Roma",    "2025-01-10", "08:00", "14:00", 3, "Viaggio diretto, soste autogrill"],
+    [2, 2, 2, "Torino",  "Bologna", "2025-01-15", "09:00", "13:30", 4, "Auto ibrida, consumi ridotti"],
+    [3, 3, 3, "Roma",    "Napoli",  "2025-02-20", "10:00", "12:30", 4, "Tesla silenziosa e comoda"],
+    [4, 1, 4, "Milano",  "Firenze", "2025-03-05", "07:30", "11:00", 2, "Partenza puntuale"],
+    [5, 2, 2, "Venezia", "Milano",  "2025-03-12", "15:00", "17:30", 3, null],
+    [6, 3, 3, "Napoli",  "Bari",    "2025-03-20", "11:00", "14:00", 3, "Zero emissioni!"],
+  ];
+  pastTrips.forEach(t =>
+    db.run("INSERT OR IGNORE INTO viaggi (id,id_utente,id_veicolo,citta_partenza,citta_arrivo,data_viaggio,ora_partenza,ora_arrivo,posti,descrizione) VALUES (?,?,?,?,?,?,?,?,?,?)", t)
+  );
+
+  const bookings = [
+    [1, 1, 4, "accettata"], [2, 1, 5, "accettata"],
+    [3, 2, 4, "accettata"], [4, 3, 5, "accettata"],
+    [5, 4, 6, "accettata"], [6, 5, 6, "accettata"],
+    [7, 2, 6, "accettata"], [8, 3, 6, "accettata"],
+  ];
+  bookings.forEach(b =>
+    db.run("INSERT OR IGNORE INTO prenotazioni (id,id_viaggio,id_passeggero,stato) VALUES (?,?,?,?)", b)
+  );
+
+  const feedbacks = [
+    [1, 4, 1, 1, 5, "Autista puntuale e gentile!"],
+    [2, 5, 1, 1, 4, "Buon viaggio, un po' di traffico."],
+    [3, 4, 2, 2, 5, "Toyota hybrid silenziosissima."],
+    [4, 6, 3, 3, 5, "Tesla fantastica, zero emissioni!"],
+  ];
+  feedbacks.forEach(f =>
+    db.run("INSERT OR IGNORE INTO feedback (id,id_autore,id_destinatario,id_viaggio,voto,commento) VALUES (?,?,?,?,?,?)", f)
   );
 }
 
-// -------------------------
-// REGISTRAZIONE
-// -------------------------
-app.post("/api/register", (req, res) => {
-  const { nome, cognome, email, password, telefono } = req.body;
+// ── Test endpoint ─────────────────────────────────────────────────────────────
+app.get("/test", (_, res) => res.json({ success: true, message: "Server attivo!" }));
 
-  if (!nome || !cognome || !email || !password) {
-    return res.status(400).json({ success: false, message: "Campi obbligatori mancanti." });
-  }
+// ── Routes ────────────────────────────────────────────────────────────────────
+app.use("/api",           require("./routes/auth")(db));      // POST /api/register, /api/login
+app.use("/api/trips",     require("./routes/trips")(db));
+app.use("/api/bookings",  require("./routes/bookings")(db));
+app.use("/api/vehicles",  require("./routes/vehicles")(db));
+app.use("/api/feedback",  require("./routes/feedback")(db));
 
-  db.get("SELECT id FROM utenti WHERE email = ?", [email], (err, row) => {
-    if (err) return res.status(500).json({ success: false, message: "Errore interno." });
-    if (row) return res.status(409).json({ success: false, message: "Email già registrata." });
-
-    const hashedPwd = hashPassword(password);
-    db.run(
-      "INSERT INTO utenti (nome, cognome, email, password, telefono) VALUES (?, ?, ?, ?, ?)",
-      [nome, cognome, email, hashedPwd, telefono || null],
-      function (err) {
-        if (err) return res.status(500).json({ success: false, message: "Errore durante la registrazione." });
-        res.json({ success: true, message: "Registrazione completata!", userId: this.lastID });
-      }
-    );
-  });
-});
-
-// -------------------------
-// LOGIN
-// -------------------------
-app.post("/api/login", (req, res) => {
-  const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ success: false, message: "Email e password obbligatorie." });
-  }
-
-  const hashedPwd = hashPassword(password);
-  db.get(
-    "SELECT id, nome, cognome, email, telefono FROM utenti WHERE email = ? AND password = ?",
-    [email, hashedPwd],
-    (err, row) => {
-      if (err) return res.status(500).json({ success: false, message: "Errore interno." });
-      if (!row) return res.status(401).json({ success: false, message: "Credenziali non valide." });
-
-      isAutista(row.id, (autista) => {
-        res.json({
-          success: true,
-          message: "Login effettuato!",
-          user: {
-            id: row.id,
-            nome: row.nome,
-            cognome: row.cognome,
-            email: row.email,
-            telefono: row.telefono,
-            tipo: autista ? "autista" : "passeggero"
-          }
-        });
-      });
-    }
-  );
-});
-
-// -------------------------
-// PROFILO UTENTE
-// GET /api/users/:id
-// -------------------------
-app.get("/api/users/:id", (req, res) => {
-  const userId = req.params.id;
-  db.get(
-    "SELECT id, nome, cognome, email, telefono FROM utenti WHERE id = ?",
-    [userId],
-    (err, row) => {
-      if (err || !row) return res.status(404).json({ success: false, message: "Utente non trovato." });
-
-      isAutista(row.id, (autista) => {
-        res.json({
-          success: true,
-          user: { ...row, tipo: autista ? "autista" : "passeggero" }
-        });
-      });
-    }
-  );
-});
-
-// -------------------------
-// VEICOLI
-// -------------------------
-
-// GET /api/vehicles?id_utente=X
-app.get("/api/vehicles", (req, res) => {
-  const { id_utente } = req.query;
-  if (!id_utente) return res.status(400).json({ success: false, message: "id_utente richiesto." });
-
-  db.all(
-    "SELECT id, modello, targa, posti FROM veicoli WHERE id_utente = ? ORDER BY id DESC",
-    [id_utente],
-    (err, rows) => {
-      if (err) return res.status(500).json({ success: false, message: "Errore interno." });
-      res.json({ success: true, vehicles: rows });
-    }
-  );
-});
-
-// POST /api/vehicles
-app.post("/api/vehicles", (req, res) => {
-  const { id_utente, modello, targa, posti } = req.body;
-  if (!id_utente || !modello || !targa || !posti) {
-    return res.status(400).json({ success: false, message: "Campi obbligatori mancanti." });
-  }
-
-  db.run(
-    "INSERT INTO veicoli (id_utente, modello, targa, posti) VALUES (?, ?, ?, ?)",
-    [id_utente, modello, targa, Number(posti)],
-    function (err) {
-      if (err) return res.status(500).json({ success: false, message: "Errore durante il salvataggio." });
-      res.json({ success: true, message: "Veicolo aggiunto!", vehicleId: this.lastID });
-    }
-  );
-});
-
-// DELETE /api/vehicles/:id
-app.delete("/api/vehicles/:id", (req, res) => {
-  const vehicleId = req.params.id;
-  const { id_utente } = req.body;
-
-  db.run(
-    "DELETE FROM veicoli WHERE id = ? AND id_utente = ?",
-    [vehicleId, id_utente],
-    function (err) {
-      if (err) return res.status(500).json({ success: false, message: "Errore durante la rimozione." });
-      if (this.changes === 0) return res.status(404).json({ success: false, message: "Veicolo non trovato o non autorizzato." });
-      res.json({ success: true, message: "Veicolo rimosso." });
-    }
-  );
-});
-
-// -------------------------
-// VIAGGI
-// -------------------------
-
-// GET /api/trips — tutti i viaggi con filtri opzionali
-app.get("/api/trips", (req, res) => {
-  const { from, to, date } = req.query;
-
-  let sql = `
-    SELECT
-      v.id,
-      v.citta_partenza,
-      v.citta_arrivo,
-      v.data_viaggio,
-      v.ora_partenza,
-      v.ora_arrivo,
-      v.posti,
-      v.descrizione,
-      u.id      AS offerente_id,
-      u.nome    AS offerente_nome,
-      u.cognome AS offerente_cognome,
-      COALESCE((SELECT COUNT(*) FROM prenotazioni p
-       WHERE p.id_viaggio = v.id AND p.stato IN ('in_attesa','accettata')), 0) AS prenotazioni_attive,
-      COALESCE((SELECT ROUND(AVG(f.voto),1) FROM feedback f WHERE f.id_destinatario = v.id_utente), 0) AS voto_medio_autista,
-      (SELECT COUNT(*) FROM feedback f WHERE f.id_destinatario = v.id_utente) AS num_feedback
-    FROM viaggi v
-    LEFT JOIN utenti u ON u.id = v.id_utente
-    WHERE 1=1
-  `;
-  const params = [];
-
-  if (from) { sql += " AND lower(v.citta_partenza) LIKE lower(?)"; params.push(`%${from}%`); }
-  if (to)   { sql += " AND lower(v.citta_arrivo)   LIKE lower(?)"; params.push(`%${to}%`); }
-  if (date) { sql += " AND v.data_viaggio = ?";                     params.push(date); }
-
-  sql += " ORDER BY v.data_viaggio ASC, v.ora_partenza ASC";
-
-  db.all(sql, params, (err, rows) => {
-    if (err) {
-      console.error("Errore GET /api/trips:", err.message);
-      return res.status(500).json({ success: false, message: "Errore interno: " + err.message });
-    }
-    const trips = rows.map(r => ({ ...r, posti_liberi: r.posti - (r.prenotazioni_attive || 0) }));
-    res.json({ success: true, trips });
-  });
-});
-
-// POST /api/trips — solo autisti
-app.post("/api/trips", (req, res) => {
-  const { id_utente, citta_partenza, citta_arrivo, data_viaggio, ora_partenza, ora_arrivo, posti, descrizione } = req.body;
-
-  if (!id_utente || !citta_partenza || !citta_arrivo || !data_viaggio || !ora_partenza || !ora_arrivo || !posti) {
-    return res.status(400).json({ success: false, message: "Campi obbligatori mancanti." });
-  }
-
-  isAutista(id_utente, (autista) => {
-    if (!autista) {
-      return res.status(403).json({
-        success: false,
-        message: "Solo gli autisti possono offrire viaggi. Registra prima un veicolo nel tuo profilo."
-      });
-    }
-
-    db.run(
-      `INSERT INTO viaggi (id_utente, citta_partenza, citta_arrivo, data_viaggio, ora_partenza, ora_arrivo, posti, descrizione)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id_utente, citta_partenza, citta_arrivo, data_viaggio, ora_partenza, ora_arrivo, posti, descrizione || null],
-      function (err) {
-        if (err) {
-          console.error("Errore INSERT viaggi:", err.message);
-          return res.status(500).json({ success: false, message: "Errore durante la creazione del viaggio: " + err.message });
-        }
-        res.json({ success: true, message: "Viaggio creato!", tripId: this.lastID });
-      }
-    );
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────
-// GET /api/trips/offered?id_autista=X
-// Restituisce i viaggi GIA' EFFETTUATI offerti dall'autista,
-// con i passeggeri che vi hanno partecipato e il flag feedback_dato.
-// IMPORTANTE: questo route va registrato PRIMA di /api/trips/:id
-// ─────────────────────────────────────────────────────────────────
-app.get("/api/trips/offered", (req, res) => {
-  const { id_autista } = req.query;
-  if (!id_autista) return res.status(400).json({ success: false, message: "id_autista richiesto." });
-
-  const today = todayStr();
-  const now   = nowStr();
-
-  // Recupera i viaggi passati dell'autista
-  db.all(
-    `SELECT v.id, v.citta_partenza, v.citta_arrivo, v.data_viaggio, v.ora_partenza, v.ora_arrivo
-     FROM viaggi v
-     WHERE v.id_utente = ?
-       AND (
-         v.data_viaggio < ?
-         OR (v.data_viaggio = ? AND v.ora_partenza < ?)
-       )
-     ORDER BY v.data_viaggio DESC, v.ora_partenza DESC`,
-    [id_autista, today, today, now],
-    (err, trips) => {
-      if (err) {
-        console.error("Errore GET /api/trips/offered:", err.message);
-        return res.status(500).json({ success: false, message: "Errore interno." });
-      }
-      if (!trips || trips.length === 0) return res.json({ success: true, trips: [] });
-
-      let done = 0;
-      const result = [];
-
-      trips.forEach(trip => {
-        // Per ogni viaggio recupera i passeggeri e se l'autista li ha già valutati
-        db.all(
-          `SELECT
-             pr.id  AS prenotazione_id,
-             pr.stato,
-             u.id   AS passeggero_id,
-             u.nome AS passeggero_nome,
-             u.cognome AS passeggero_cognome,
-             (SELECT id FROM feedback
-              WHERE id_autore       = ?
-                AND id_destinatario = u.id
-                AND id_viaggio      = ?) AS feedback_dato
-           FROM prenotazioni pr
-           JOIN utenti u ON u.id = pr.id_passeggero
-           WHERE pr.id_viaggio = ?
-             AND pr.stato IN ('in_attesa','accettata')`,
-          [id_autista, trip.id, trip.id],
-          (err2, passengers) => {
-            result.push({ ...trip, passengers: passengers || [] });
-            done++;
-            if (done === trips.length) {
-              result.sort((a, b) => b.data_viaggio.localeCompare(a.data_viaggio));
-              res.json({ success: true, trips: result });
-            }
-          }
-        );
-      });
-    }
-  );
-});
-
-// -------------------------
-// PRENOTAZIONI
-// -------------------------
-app.post("/api/bookings", (req, res) => {
-  const { id_viaggio, id_passeggero } = req.body;
-
-  if (!id_viaggio || !id_passeggero) {
-    return res.status(400).json({ success: false, message: "Dati mancanti." });
-  }
-
-  db.get(
-    `SELECT v.posti, v.id_utente,
-       (SELECT COUNT(*) FROM prenotazioni p WHERE p.id_viaggio = v.id AND p.stato IN ('in_attesa','accettata')) AS prenotati
-     FROM viaggi v WHERE v.id = ?`,
-    [id_viaggio],
-    (err, viaggio) => {
-      if (err || !viaggio) return res.status(404).json({ success: false, message: "Viaggio non trovato." });
-
-      if (viaggio.id_utente === id_passeggero) {
-        return res.status(400).json({ success: false, message: "Non puoi prenotare il tuo stesso viaggio." });
-      }
-      if (viaggio.posti - viaggio.prenotati <= 0) {
-        return res.status(409).json({ success: false, message: "Nessun posto disponibile." });
-      }
-
-      db.get(
-        "SELECT id FROM prenotazioni WHERE id_viaggio = ? AND id_passeggero = ?",
-        [id_viaggio, id_passeggero],
-        (err, existing) => {
-          if (existing) return res.status(409).json({ success: false, message: "Hai già prenotato questo viaggio." });
-
-          db.run(
-            "INSERT INTO prenotazioni (id_viaggio, id_passeggero) VALUES (?, ?)",
-            [id_viaggio, id_passeggero],
-            function (err) {
-              if (err) return res.status(500).json({ success: false, message: "Errore durante la prenotazione." });
-              res.json({ success: true, message: "Prenotazione effettuata!", bookingId: this.lastID });
-            }
-          );
-        }
-      );
-    }
-  );
-});
-
-// GET /api/bookings?id_passeggero=X
-// Include feedback_dato per sapere se il passeggero ha già valutato l'autista
-app.get("/api/bookings", (req, res) => {
-  const { id_passeggero } = req.query;
-  if (!id_passeggero) {
-    return res.status(400).json({ success: false, message: "id_passeggero richiesto." });
-  }
-
-  db.all(
-    `SELECT
-       pr.id AS prenotazione_id,
-       pr.stato,
-       v.id,
-       v.citta_partenza,
-       v.citta_arrivo,
-       v.data_viaggio,
-       v.ora_partenza,
-       v.ora_arrivo,
-       v.posti,
-       v.descrizione,
-       u.id      AS offerente_id,
-       u.nome    AS offerente_nome,
-       u.cognome AS offerente_cognome,
-       COALESCE((SELECT ROUND(AVG(f.voto),1) FROM feedback f WHERE f.id_destinatario = u.id), 0) AS voto_medio_autista,
-       (SELECT id FROM feedback
-        WHERE id_autore       = pr.id_passeggero
-          AND id_destinatario = v.id_utente
-          AND id_viaggio      = v.id) AS feedback_dato
-     FROM prenotazioni pr
-     JOIN viaggi v ON v.id = pr.id_viaggio
-     LEFT JOIN utenti u ON u.id = v.id_utente
-     WHERE pr.id_passeggero = ?
-       AND pr.stato IN ('in_attesa','accettata')
-     ORDER BY v.data_viaggio DESC, v.ora_partenza DESC`,
-    [id_passeggero],
-    (err, rows) => {
-      if (err) {
-        console.error("Errore GET /api/bookings:", err.message);
-        return res.status(500).json({ success: false, message: "Errore interno." });
-      }
-      res.json({ success: true, bookings: rows });
-    }
-  );
-});
-
-// -------------------------
-// FEEDBACK
-// -------------------------
-
-// POST /api/feedback — con controllo duplicati
-app.post("/api/feedback", (req, res) => {
-  const { id_autore, id_destinatario, id_viaggio, voto, commento } = req.body;
-
-  if (!id_autore || !id_destinatario || !id_viaggio || !voto) {
-    return res.status(400).json({ success: false, message: "Campi obbligatori mancanti." });
-  }
-  if (voto < 1 || voto > 5) {
-    return res.status(400).json({ success: false, message: "Il voto deve essere tra 1 e 5." });
-  }
-  if (Number(id_autore) === Number(id_destinatario)) {
-    return res.status(400).json({ success: false, message: "Non puoi lasciare un feedback a te stesso." });
-  }
-
-  // Controllo: il viaggio deve essere già passato
-  db.get(
-    "SELECT data_viaggio, ora_partenza FROM viaggi WHERE id = ?",
-    [id_viaggio],
-    (err, trip) => {
-      if (err || !trip) {
-        return res.status(404).json({ success: false, message: "Viaggio non trovato." });
-      }
-
-      const today = todayStr();
-      const now   = nowStr();
-      const tripIsPast =
-        trip.data_viaggio < today ||
-        (trip.data_viaggio === today && trip.ora_partenza < now);
-
-      if (!tripIsPast) {
-        return res.status(400).json({
-          success: false,
-          message: "Puoi lasciare un feedback solo per viaggi già conclusi."
-        });
-      }
-
-      // Controllo: l'autore era realmente parte del viaggio
-      // (o era l'autista o era un passeggero prenotato)
-      db.get(
-        `SELECT 1 FROM viaggi WHERE id = ? AND id_utente = ?
-         UNION
-         SELECT 1 FROM prenotazioni
-         WHERE id_viaggio = ? AND id_passeggero = ? AND stato IN ('in_attesa','accettata')`,
-        [id_viaggio, id_autore, id_viaggio, id_autore],
-        (err2, partecipante) => {
-          if (err2 || !partecipante) {
-            return res.status(403).json({
-              success: false,
-              message: "Non hai partecipato a questo viaggio."
-            });
-          }
-
-          // Controllo duplicato
-          db.get(
-            "SELECT id FROM feedback WHERE id_autore = ? AND id_destinatario = ? AND id_viaggio = ?",
-            [id_autore, id_destinatario, id_viaggio],
-            (err3, existing) => {
-              if (err3) return res.status(500).json({ success: false, message: "Errore interno." });
-              if (existing) {
-                return res.status(409).json({
-                  success: false,
-                  message: "Hai già lasciato un feedback per questa persona in questo viaggio."
-                });
-              }
-
-              db.run(
-                "INSERT INTO feedback (id_autore, id_destinatario, id_viaggio, voto, commento) VALUES (?, ?, ?, ?, ?)",
-                [id_autore, id_destinatario, id_viaggio, voto, commento || null],
-                function (err4) {
-                  if (err4) return res.status(500).json({ success: false, message: "Errore durante l'invio del feedback." });
-                  res.json({ success: true, message: "Feedback inviato!", feedbackId: this.lastID });
-                }
-              );
-            }
-          );
-        }
-      );
-    }
-  );
-});
-
-// GET /api/feedback/:userId — feedback ricevuti da un utente + voto medio
-app.get("/api/feedback/:userId", (req, res) => {
-  const userId = req.params.userId;
-  db.all(
-    `SELECT f.id, f.voto, f.commento, f.id_viaggio,
-            u.nome AS autore_nome, u.cognome AS autore_cognome,
-            v.citta_partenza, v.citta_arrivo, v.data_viaggio
-     FROM feedback f
-     JOIN utenti u ON u.id = f.id_autore
-     LEFT JOIN viaggi v ON v.id = f.id_viaggio
-     WHERE f.id_destinatario = ?
-     ORDER BY f.id DESC`,
-    [userId],
-    (err, rows) => {
-      if (err) {
-        console.error("Errore GET /api/feedback:", err.message);
-        return res.status(500).json({ success: false, message: "Errore interno." });
-      }
-      const votoMedio = rows.length > 0
-        ? (rows.reduce((sum, r) => sum + r.voto, 0) / rows.length).toFixed(1)
-        : null;
-      res.json({ success: true, feedback: rows, votoMedio: votoMedio ? Number(votoMedio) : null });
-    }
-  );
-});
-
-// -------------------------
-// AVVIO SERVER
-// -------------------------
-app.listen(port, () => {
-  console.log("Server Express avviato su http://localhost:" + port);
+// ── Start ─────────────────────────────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`🚗 SmartCity backend in ascolto su http://localhost:${PORT}`);
 });
